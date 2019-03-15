@@ -71,6 +71,7 @@ class KDTree:
         self.X = X
 
     def query(self, obj, k=3):
+        obj = np.array(obj, dtype=np.float32)
         '''返回最近的k个点的距离和索引'''
         k_nearest = []
         self.__search(obj, k, self.root_node, k_nearest)
