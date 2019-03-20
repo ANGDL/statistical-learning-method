@@ -52,8 +52,9 @@ class MultinomialNB:
                                    (self.y_counter[y_k] + sj * self.lambda_)
                         prob[y_k] *= p_xij_yk
                     except KeyError:
-                        # print('Unknown feature: {} in {} dim of simple {}.'.format(x_i_j, j, i))
-                        prob[y_k] *= -2
+                        # 一下是自己的处理方式
+                        # 如果预测的某个特征值是未出现过的，那么乘以一个极小数
+                        prob[y_k] *= 1e-8
 
                 p_yk = (self.y_counter[y_k] + self.lambda_) / (self.n_simples + len(self.y_counter) * self.lambda_)
                 prob[y_k] *= -p_yk
@@ -77,7 +78,7 @@ if __name__ == '__main__':
     nb_classifier = MultinomialNB()
     nb_classifier.fit(X, y)
 
-    ret = nb_classifier.predict(X)
+    ret = nb_classifier.predict([[5, 'M']])
 
     print(ret)
 
