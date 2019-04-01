@@ -137,6 +137,7 @@ class DecisionTree:
                 b_loss = self.loss_function(n_sub_sample_classes, sub_node_entropy, alpha, 0)
                 a_loss = self.loss_function(len(node.sample_classes), entropy, alpha, n_sub_samples)
                 if a_loss < b_loss:
+                    # 剪枝
                     c = Counter(sub_leaf_class)
                     node.sub.clear()  # 清理子树
                     node.leaf = c.most_common(1)[0][0]  # 设置叶节点
