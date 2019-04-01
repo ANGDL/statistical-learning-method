@@ -3,14 +3,6 @@ from collections import Counter
 import matplotlib.pyplot as plt
 
 
-def squared_error(y, y_hat):
-    return np.sum((y - y_hat) ** 2)
-
-
-def ave_pred(y):
-    return np.mean(y)
-
-
 def split(X, y, dim, value):
     '''
     :param X:
@@ -85,7 +77,7 @@ class CartBase:
                             best_loss = loss_sum
                             best_split_dim = dim
                             best_split_value = v
-            # 未找到合适的切分点
+            # 找到合适的切分点
             if best_split_dim != -1:
                 X_l, X_r, y_l, y_r = split(X, y, best_split_dim, best_split_value)
                 node.split_dim = best_split_dim
@@ -102,6 +94,7 @@ class CartBase:
 
                 if node.left is not None or node.right is not None:
                     self.depth += 1
+            # 未找到合适的切分点
             else:
                 node.n_leaf += 1  # 标记一次叶节点
                 node.split_value = self.pred_func(y)
@@ -143,10 +136,10 @@ class CartBase:
 
 class CartRegression(CartBase):
     def loss_func(self, y, y_hat):
-        return squared_error(y, y_hat)
+        return np.sum((y - y_hat) ** 2)
 
     def pred_func(self, y):
-        return ave_pred(y)
+        return np.mean(y)
 
 
 class CartClassifier(CartBase):
