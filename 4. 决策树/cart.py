@@ -1,6 +1,7 @@
 import numpy as np
 from collections import Counter
 import matplotlib.pyplot as plt
+import copy
 
 
 def split(X, y, dim, value):
@@ -24,6 +25,16 @@ class Node:
         self.split_dim = None  # 切分维度
         self.split_value = None  # 切分的值
         self.n_leaf = 0  # 以该节点为子树的叶节点个数
+
+    def set_to_leaf(self, value):
+        self.left = None
+        self.right = None
+        self.split_value = value
+        self.n_leaf = 1
+
+    @property
+    def is_leaf(self):
+        return self.right is None and self.right is None
 
 
 class CartBase:
@@ -102,6 +113,9 @@ class CartBase:
             node.n_leaf += 1  # 标记一次叶节点
             node.split_value = self.pred_func(y)
 
+        if node.left is not None and node.right is not None:
+            node.n_leaf += (node.left.n_leaf + node.right.n_leaf)
+
         return node
 
     def fit(self, X, y):
@@ -113,6 +127,7 @@ class CartBase:
         split_dim = node.split_dim
         split_value = node.split_value
 
+        # 左右结点都是None的时候split_value存放预测值
         if node.left is None and node.right is None:
             return node.split_value
 
@@ -143,6 +158,11 @@ class CartRegression(CartBase):
 
 
 class CartClassifier(CartBase):
+    def __init__(self, max_depth=None, min_samples_leaf=1, min_samples_split=2):
+        super().__init__(max_depth=max_depth, min_samples_leaf=min_samples_leaf, min_samples_split=min_samples_split)
+        self.__alpha_list = []
+        self.__sub_tree_list = []
+
     def loss_func(self, y, y_hat=None):
         y_counter = Counter(y)
         ret = 0.0
@@ -154,6 +174,70 @@ class CartClassifier(CartBase):
     def pred_func(self, y):
         y_counter = Counter(y)
         return y_counter.most_common(1)[0][0]
+
+    def __calc_alpha(self, X, y, node, len_data):
+        '''自上而下的计算alpha'''
+        # 左右结点都是None的时候split_value存放预测值
+        if node.is_leaf:
+            return self.loss_func(y)
+
+        if not (node.left is not None and node.right is not None):
+            raise Exception('Tree created error')
+
+        X_l, X_r, y_l, y_r = split(X, y, node.split_dim, node.split_value)
+
+        loss_left = self.__calc_alpha(X_l, y_l, node.left, len_data)
+        loss_right = self.__calc_alpha(X_r, y_r, node.right, len_data)
+
+        loss_current_node = self.loss_func(y)
+
+        gini_loss = (loss_left * len(y_l) / len_data) + (loss_right * len(y_r) / len_data)
+        alpha = (loss_current_node - gini_loss) / (node.n_leaf - 1)
+        setattr(node, 'alpha', alpha)
+        self.__alpha_list.append(alpha)
+
+        return loss_current_node
+
+    def __pruning(self, X, y, node, alpha):
+        '''自下而上的剪枝'''
+
+        # 如果是单节点树，返回
+        if node.is_leaf:
+            return
+
+        # 如果不是单节点树
+        # 如果该节点是的alpha是
+        if node.alpha == alpha:
+            node.set_to_leaf(self.pred_func(y))  # 标记未叶子节点
+
+            # 单节点树直接返回
+            if self.root.n_leaf == 1:
+                return
+
+            self.root.n_leaf -= 2
+
+            sub_tree = copy.deepcopy(self)
+            self.__sub_tree_list.append(sub_tree)
+        else:
+            if not (node.left is not None and node.right is not None):
+                raise Exception('Tree created error')
+
+            X_l, X_r, y_l, y_r = split(X, y, node.split_dim, node.split_value)
+            self.__pruning(X_l, y_l, node.left, alpha)
+            self.__pruning(X_r, y_r, node.right, alpha)
+
+    def pruning(self, X, y):
+        assert len(X) == len(y), 'shape error'
+        self.__sub_tree_list.append(copy.deepcopy(self))
+        self.__calc_alpha(X, y, self.root, len(y))
+
+        # 升序排序
+        alpha_list = list(set(self.__alpha_list))
+        alpha_list.sort()
+        # 对最小的alpha对应的子树进行剪枝
+        for alpha in alpha_list:
+            self.__pruning(X, y, self.root, alpha)
+        return self.__sub_tree_list
 
 
 def plot_decision_boundary(model, axis):
@@ -178,25 +262,34 @@ if __name__ == '__main__':
     from sklearn.metrics import mean_squared_error
     from sklearn.tree import DecisionTreeRegressor
 
-    boston = datasets.load_boston()
-    X = boston.data
-    y = boston.target
-    X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=666)
-    dt_reg = CartRegression(min_samples_leaf=3)
-    dt_reg.fit(X_train, y_train)
-    y_pred = dt_reg.predict(X_test)
-    print(mean_squared_error(y_test, y_pred))
+    # boston = datasets.load_boston()
+    # X = boston.data
+    # y = boston.target
+    # X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=666)
+    # dt_reg = CartRegression(min_samples_leaf=3)
+    # dt_reg.fit(X_train, y_train)
+    # y_pred = dt_reg.predict(X_test)
+    # print(mean_squared_error(y_test, y_pred))
+    #
+    # dt_reg_2 = DecisionTreeRegressor()
+    # dt_reg_2.fit(X_train, y_train)
+    # y_pred_2 = dt_reg_2.predict(X_test)
+    # print(mean_squared_error(y_test, y_pred_2))
 
-    dt_reg_2 = DecisionTreeRegressor()
-    dt_reg_2.fit(X_train, y_train)
-    y_pred_2 = dt_reg_2.predict(X_test)
-    print(mean_squared_error(y_test, y_pred_2))
-
-    X, y = datasets.make_moons(noise=0.25, random_state=666)
+    X, y = datasets.make_moons(noise=0.25, random_state=111111)
     dt_clf = CartClassifier()
     dt_clf.fit(X, y)
 
-    plot_decision_boundary(dt_clf, axis=[-1.5, 2.5, -1.0, 1.5])
-    plt.scatter(X[y == 0, 0], X[y == 0, 1])
-    plt.scatter(X[y == 1, 0], X[y == 1, 1])
-    plt.show()
+    # plot_decision_boundary(dt_clf, axis=[-1.5, 2.5, -1.0, 1.5])
+    # plt.scatter(X[y == 0, 0], X[y == 0, 1])
+    # plt.scatter(X[y == 1, 0], X[y == 1, 1])
+    # plt.show()
+
+    l = dt_clf.pruning(X, y)
+
+    for i in l:
+        print(i.root.n_leaf)
+        plot_decision_boundary(i, axis=[-1.5, 2.5, -1.0, 1.5])
+        plt.scatter(X[y == 0, 0], X[y == 0, 1])
+        plt.scatter(X[y == 1, 0], X[y == 1, 1])
+        plt.show()
