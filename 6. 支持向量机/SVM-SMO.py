@@ -82,8 +82,9 @@ class CalcB:
 
 
 class SVM:
-    def __init__(self, c=1, kernel=kernel_linear):
+    def __init__(self, c=1, epsilon=0.02, kernel=kernel_linear):
         self.c = c
+        self.epsilon = epsilon
         self.kernel = kernel
         self.CalcGx = CalcGx(self.kernel)
         self.CalcEi = CalcEi()
@@ -99,22 +100,48 @@ class SVM:
         self.sv_idx = None
         self.mask_idx = None
 
+    # 判断是否违反kkt条件
     def check_kkt(self, ai, yi, gi):
         if ai == 0:
-            return yi * gi >= 1
+            return yi * gi >= 1 - self.epsilon
         elif 0 < ai < self.c:
-            return yi * gi == 1
+            return 1 - self.epsilon <= yi * gi <= 1 + self.epsilon
         elif ai == self.c:
-            return yi * gi <= 1
+            return yi * gi <= 1 + self.epsilon
         else:
             print('check_kkt error, ai={}'.format(ai))
             return None
 
-    def choose_a1_idx(self):
+    # 违反kkt条件的严重程度
+    def score_violate_kkt(self, yi, gi):
+        return np.abs(yi * gi - 1)
+
+    def update_b(self, b1_new, b2_new, a1_new, a2_new):
+        if 0 < a1_new < self.c:
+            self.b = b1_new
+        elif 0 < a2_new < self.c:
+            self.b = b2_new
+        else:
+            self.b = (b1_new + b2_new) / 2
+
+    def find_a1_idx(self):
+        # 外层循环, 寻找a1
+        a1_idx = 0
+        a1_v_kkt_score = float("-inf")
+
         for i in range(len(self.X)):
             xi = self.X[i]
+            yi = self.y[i]
             ai = self.a[i]
             gi = self.CalcGx(self.X, self.y, self.a, xi, self.b)
+
+            if not self.check_kkt(ai, yi, gi):
+                score = self.score_violate_kkt(yi,gi)
+                if score > a1_v_kkt_score:
+                    a1_idx = i
+                    a1_v_kkt_score = score
+
+        return a1_idx
 
 
 
