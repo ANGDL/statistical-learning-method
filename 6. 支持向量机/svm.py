@@ -4,6 +4,7 @@ np.random.seed(666)
 
 class KernelLinear:
     def __call__(self, x1, x2):
+        '''线性核函数'''
         return np.dot(x1, x2)
 
 
@@ -12,6 +13,7 @@ class KernelPloy:
         self.p = p
 
     def __call__(self, x1, x2):
+        '''多项式核函数'''
         return (np.dot(x1, x2) + 1) ** self.p
 
 
@@ -20,7 +22,14 @@ class KernelGauss:
         self.gamma = gamma
 
     def __call__(self, x1, x2):
-        return np.exp(- self.gamma * np.sum((x1 - x2) ** 2))
+        '''高斯核函数'''
+        # 此处有坑
+        if x1.ndim != x2.ndim:
+            s = np.sum((x1 - x2) ** 2, axis=1)
+        else:
+            s = np.sum((x1 - x2) ** 2)
+
+        return np.exp(-self.gamma * s)
 
 
 class Loss:
@@ -47,24 +56,29 @@ class Loss:
 
 
 class CalcGxi:
+    '''计算g(x)'''
     def __init__(self, kernel):
         self.kernel = kernel
 
     def __call__(self, X, y, a, xi, b):
-        return np.sum(a * y * self.kernel(X, xi)) + b
+        s = a * y * self.kernel(X, xi)
+        return np.sum(s) + b
 
 
 class CalcEi:
+    '''计算Ei'''
     def __call__(self, gi, yi):
         return gi - yi
 
 
 class CalcA2Unc:
+    '''计算未剪切的a2'''
     def __call__(self, a2_old, y2, e1, e2, eta):
         return a2_old + y2 * (e1 - e2) / eta
 
 
 class CalcA2:
+    '''剪切a2'''
     def __init__(self, c):
         self.c = c
 
@@ -85,22 +99,25 @@ class CalcA2:
 
 
 class CalcA1:
+    '''计算a1'''
     def __call__(self, a1_old, a2_old, a2_new, y1, y2):
         return a1_old + y1 * y2 * (a2_old - a2_new)
 
 
 class CalcEta:
+    '''计算η'''
     def __call__(self, k11, k22, k12):
         return k11 + k22 - 2 * k12
 
 
 class CalcB:
+    '''计算b'''
     def __call__(self, x1, x2, y1, y2, a1_old, a2_old, a1_new, a2_new, k1, k2, e, b_old):
         return -e - y1 * k1 * (a1_new - a1_old) - y2 * k2 * (a2_new - a2_old) + b_old
 
 
 class SVM:
-    def __init__(self, c=1.0, epsilon=0.0, kernel='linear', max_iter=-1, p=2, gamma=0.01):
+    def __init__(self, c=1.0, epsilon=1e-3, kernel='linear', max_iter=-1, p=2, gamma=0.01):
         self.c = c
         self.epsilon = epsilon
 
@@ -128,39 +145,25 @@ class SVM:
         self.a = None
         self.e = None
         self.g = None
-        self.sv_idx = []
+        self.support_ = []
         self.mask_idx2 = set()
         self.mask_idx1 = set()
 
         self.max_iter = max_iter
 
-    # 判断是否违反kkt条件
     def check_kkt(self, ai, yi, gi):
-        if ai == 0.0:
-            return yi * gi >= 1 - self.epsilon
+        '''判断是否违反kkt条件'''
+        if ai == 0.0 or np.isclose(ai, 0.0):
+            return yi * gi >= 1
         elif 0 < ai < self.c:
-            return 1 - self.epsilon <= yi * gi <= 1 + self.epsilon
-        elif ai == self.c:
-            return yi * gi <= 1 + self.epsilon
+            return yi * gi == 1
+        elif ai == self.c or np.isclose(ai, self.c):
+            return yi * gi <= 1
         else:
             raise Exception('ai={} out range of {}-{}'.format(ai, 0, self.c))
 
-    # 违反kkt条件的严重程度
-    def score_violate_kkt(self, ai, yi, gi):
-        if ai == 0 and not (yi * gi >= 1 - self.epsilon):
-            return np.abs(1 - self.epsilon - yi * gi)
-
-        if 0 < ai < self.c and not (1 - self.epsilon <= yi * gi <= 1 + self.epsilon):
-            return max(np.abs(1 - self.epsilon - yi * gi), np.abs(1 + self.epsilon - yi * gi))
-
-        if ai == self.c and not(yi * gi <= 1 + self.epsilon):
-            return np.abs(1 + self.epsilon - yi * gi)
-
-        else:
-            # print('ai={} does not violate kkt'.format(ai))
-            return 0
-
     def update_b(self, b1_new, b2_new, a1_new, a2_new):
+        '''更新b'''
         if 0 < a1_new < self.c:
             self.b = b1_new
         elif 0 < a2_new < self.c:
@@ -168,54 +171,41 @@ class SVM:
         else:
             self.b = (b1_new + b2_new) / 2
 
-    def find_a1_idx(self):
-        '''外层循环, 寻找a1'''
-        a1_idx = 0
-        a1_v_kkt_score = float("-inf")
-
-        for i in range(len(self.X)):
-            yi = self.y[i]
-            ai = self.a[i]
-            gi = self.g[i]
-
-            score = self.score_violate_kkt(ai, yi, gi)
-            if score > a1_v_kkt_score and i not in self.mask_idx1:
-                a1_idx = i
-                a1_v_kkt_score = score
-
-        self.mask_idx1.clear()
-        return a1_idx
-
     def find_a2_idx(self, idx1):
-        '''寻找e2'''
+        '''按|E1 - E2|寻找e2'''
         e1 = self.e[idx1]
-        sorted_e = np.argsort(self.e)
+        idx_sorted = np.argsort(self.e)
 
         if e1 > 0:
-            for i in sorted_e:
-                if self.e[i] not in self.mask_idx2 and i != idx1:
+            for i in idx_sorted:
+                if i not in self.mask_idx2 and i != idx1:
                     return i
         if e1 < 0:
-            for i in sorted_e[::-1]:
-                if self.e[i] not in self.mask_idx2 and i != idx1:
+            for i in idx_sorted[::-1]:
+                if i not in self.mask_idx2 and i != idx1:
                     return i
+        idx_sorted = idx_sorted[idx_sorted != idx1]
+        return np.random.choice(idx_sorted)
 
-        sorted_e = sorted_e[(sorted_e != idx1) & (sorted_e not in self.mask_idx2)]
-        return sorted_e[-1]
+    def random_chose_a2(self, idx1):
+        '''随机选择a2'''
+        idx_sorted = np.argsort(self.e)
+        idx_sorted = idx_sorted[idx_sorted != idx1]
+        return np.random.choice(idx_sorted)
 
-    def find_a2_in_sv(self, idx1, idx2):
-        self.mask_idx2.add(idx2)
+    def find_a2_in_sv(self, idx1):
+        '''在支持向量点上寻找a2'''
         idx2_list = np.argwhere(self.a > 0)
 
         for idx in idx2_list:
-            if idx[0] not in self.mask_idx2 and idx[0] != idx1 \
-                    and self.check_kkt(self.a[idx], self.y[idx], self.g[idx]):
+            if idx[0] not in self.mask_idx2 and idx[0] != idx1:
                 return idx[0]
 
         # print("some thing error in a2!")
         return None
 
     def check_terminal(self):
+        '''终止条件'''
         ret = True
         for ai, yi, gi in zip(self.a, self.y, self.g):
             if not 0 <= ai <= self.c or not self.check_kkt(ai, yi, gi):
@@ -235,6 +225,93 @@ class SVM:
 
         return w
 
+    def smo(self):
+        '''SMO算法实现'''
+        it = 0
+        loss = float('inf')
+        a2_in_sv = False
+
+        while True:
+            for idx1 in range(len(self.y)):
+                # 满足停机条件，退出循环
+                it += 1
+
+                if self.max_iter != -1 and it > self.max_iter:
+                    return
+
+                # 寻找违反kkt条件的idx1
+                if self.check_kkt(self.a[idx1], self.y[idx1], self.g[idx1]):
+                    continue
+
+                # 获取idx1对应的值
+                x1 = self.X[idx1]
+                y1 = self.y[idx1]
+                a1_old = self.a[idx1]
+                g1_old = self.g[idx1]
+                e1_old = self.CalcEi(g1_old, y1)
+
+                if a2_in_sv:  # 特殊条件，上次循环目标函数下降较小，支持向量点寻找
+                    idx2 = self.find_a2_in_sv(idx1)
+                else:
+                    idx2 = self.find_a2_idx(idx1)  # 寻找a2的索引
+
+                # 取出idx2对应的值
+                x2 = self.X[idx2]
+                y2 = self.y[idx2]
+
+                a2_old = self.a[idx2]
+                e2_old = self.e[idx2]
+
+                # 计算核函数
+                k11 = self.kernel(x1, x1)
+                k22 = self.kernel(x2, x2)
+                k12 = self.kernel(x1, x2)
+                k21 = k12
+
+                # 计算η
+                eta = self.CalcEta(k11, k22, k12)
+                if eta <= 0:
+                    continue
+
+                # 计算未裁剪的a2
+                a2_new_unc = self.CalcA2Unc(a2_old, y2, e1_old, e2_old, eta)
+                # 计算裁剪后的a2
+                a2_new = self.CalcA2(a1_old, a2_old, a2_new_unc, y1, y2)
+
+                if np.abs(a2_new - a2_old) < 1e-6:
+                    a2_in_sv = True
+                    continue
+                else:
+                    a2_in_sv = False
+
+                # 使用新的a2更新a1
+                a1_new = self.CalcA1(a1_old, a2_old, a2_new, y1, y2)
+
+                # 如果新的a1不满足 0<=a1<=C，说明a2不合适
+                if a1_new < 0.0 or a1_new > self.c:
+                    continue
+
+                # update
+                self.a[idx1] = a1_new
+                self.a[idx2] = a2_new
+
+                # 计算新的b
+                b1_new = self.CalcB(x1, x2, y1, y2, a1_old, a2_old, a1_new, a2_new, k11, k21, self.e[idx1], self.b)
+                b2_new = self.CalcB(x1, x2, y1, y2, a1_old, a2_old, a1_new, a2_new, k12, k22, self.e[idx2], self.b)
+                self.update_b(b1_new, b2_new, a1_new, a2_new)
+
+                self.g[idx1] = self.CalcGxi(self.X, self.y, self.a, x1, self.b)
+                self.g[idx2] = self.CalcGxi(self.X, self.y, self.a, x2, self.b)
+                self.e[idx1] = self.CalcEi(self.g[idx1], self.y[idx1])
+                self.e[idx2] = self.CalcEi(self.g[idx2], self.y[idx2])
+
+                new_loss = self.Loss(self.X, self.y, self.a, idx1, idx2)  # 计算loss
+
+                # 在ε范围内，满足结束条件
+                if np.abs((new_loss - loss)+1 / (loss + 1)) < self.epsilon and self.check_terminal():
+                    return
+                loss = new_loss
+
     def fit(self, X, y):
         assert len(X) == len(y), "X, y must have a same len"
 
@@ -244,95 +321,12 @@ class SVM:
         self.e = np.array(-self.y, dtype=np.float)
         self.g = np.zeros(len(y), dtype=np.float)
 
-        it = 0
-        loss = float('inf')
-        a2_in_sv = False
-
-        while True:
-            # 满足停机条件，退出循环
-            if self.check_terminal():
-                break
-
-            it += 1
-            if self.max_iter != -1 and it > self.max_iter:
-                break
-
-            idx1 = self.find_a1_idx()  # 寻找a1的索引
-            # 获取idx1对应的值
-            x1 = self.X[idx1]
-            y1 = self.y[idx1]
-            a1_old = self.a[idx1]
-            g1_old = self.g[idx1]
-            e1_old = self.CalcEi(g1_old, y1)
-
-            idx2 = self.find_a2_idx(idx1)  # 寻找a2的索引
-            if a2_in_sv:  # 特殊条件，上次循环目标函数下降较小，支持向量点寻找
-                idx2 = self.find_a2_in_sv(idx1, idx2)
-
-            if idx2 is None:  # 如果找不到，放弃这个a1，继续寻找
-                self.mask_idx1.add(idx1)
-                a2_in_sv = False
-                continue
-
-            # 取出idx2对应的值
-            x2 = self.X[idx2]
-            y2 = self.y[idx2]
-
-            a2_old = self.a[idx2]
-            e2_old = self.e[idx2]
-
-            # 计算核函数
-            k11 = self.kernel(x1, x1)
-            k22 = self.kernel(x2, x2)
-            k12 = self.kernel(x1, x2)
-            k21 = k12
-
-            # 计算η
-            eta = self.CalcEta(k11, k22, k12)
-            if eta <= 0:
-                self.mask_idx2.add(idx2)
-                continue
-
-            # 计算未裁剪的a2
-            a2_new_unc = self.CalcA2Unc(a2_old, y2, e1_old, e2_old, eta)
-            # 计算裁剪后的a2
-            a2_new = self.CalcA2(a1_old, a2_old, a2_new_unc, y1, y2)
-            # 使用新的a2更新a1
-            a1_new = self.CalcA1(a1_old, a2_old, a2_new, y1, y2)
-
-            # 如果新的a1不满足 0<=a1<=C，说明a2不合适
-            if a1_new < 0.0 or a1_new > self.c:
-                self.mask_idx2.add(idx2)
-                continue
-
-            # update
-            self.a[idx1] = a1_new
-            self.a[idx2] = a2_new
-
-            # 计算新的b
-            b1_new = self.CalcB(x1, x2, y1, y2, a1_old, a2_old, a1_new, a2_new, k11, k21, self.e[idx1], self.b)
-            b2_new = self.CalcB(x1, x2, y1, y2, a1_old, a2_old, a1_new, a2_new, k12, k22, self.e[idx2], self.b)
-            self.update_b(b1_new, b2_new, a1_new, a2_new)
-
-            self.g[idx1] = self.CalcGxi(self.X, self.y, self.a, x1, self.b)
-            self.g[idx2] = self.CalcGxi(self.X, self.y, self.a, x2, self.b)
-            self.e[idx1] = self.CalcEi(self.g[idx1], self.y[idx1])
-            self.e[idx2] = self.CalcEi(self.g[idx2], self.y[idx2])
-
-            new_loss = self.Loss(self.X, self.y, self.a, idx1, idx2)  # 计算loss
-
-            # 如果loss减低太小，则在支持向量点寻找a2
-            if abs(new_loss - loss) < 1e-5:
-                a2_in_sv = True
-                self.mask_idx2.add(idx2)
-            else:
-                a2_in_sv = False
-                self.mask_idx2.clear()
-
-            loss = new_loss
+        self.smo()
 
         # 计算下w
         self.w = self.get_w()
+
+        self.support_ = np.argwhere(self.a > 0).flatten()
 
         return self
 
@@ -418,6 +412,7 @@ def plot_decision_boundary(model, axis):
 
 
 if __name__ == '__main__':
+
     import matplotlib.pylab as plt
     from sklearn.svm import LinearSVC
 
@@ -443,14 +438,18 @@ if __name__ == '__main__':
     # clf.fit(X, y)
     # plot_sk_svc_decision_boundary(clf, [0, 10, -5, 10], X, y)
     from sklearn import datasets
-    X, y = datasets.make_circles(n_samples=50, random_state=888)
+    X, y = datasets.make_circles(n_samples=21, random_state=888)
     y[y == 0] = -1
-    # my_svm = SVM(c=10, epsilon=0.15, kernel='poly', max_iter=10000, p=7, sigma=1.3)
-    my_svm = SVM(c=5, epsilon=0.01, kernel='rbf', max_iter=10000, gamma=0.11)
+
+    my_svm = SVM(c=5, kernel='rbf', max_iter=20000, gamma=1)
     my_svm.fit(X, y)
-    plot_decision_boundary(my_svm, axis=[-3.5, 3.5, -2.5, 2.5])
 
+    y_pred = my_svm.predict(X)
 
+    print(y_pred == y)
+
+    plot_decision_boundary(my_svm, axis=[-2.5, 2.5, -1.5, 1.5])
     plt.scatter(X[y == -1, 0], X[y == -1, 1])
     plt.scatter(X[y == 1, 0], X[y == 1, 1])
     plt.show()
+
