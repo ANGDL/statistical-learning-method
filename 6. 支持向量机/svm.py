@@ -1,8 +1,26 @@
 import numpy as np
+np.random.seed(666)
 
 
-def kernel_linear(x1, x2):
-    return np.dot(x1, x2)
+class KernelLinear:
+    def __call__(self, x1, x2):
+        return np.dot(x1, x2)
+
+
+class KernelPloy:
+    def __init__(self, p):
+        self.p = p
+
+    def __call__(self, x1, x2):
+        return (np.dot(x1, x2) + 1) ** self.p
+
+
+class KernelGauss:
+    def __init__(self, gamma):
+        self.gamma = gamma
+
+    def __call__(self, x1, x2):
+        return np.exp(- self.gamma * np.sum((x1 - x2) ** 2))
 
 
 class Loss:
@@ -33,7 +51,7 @@ class CalcGxi:
         self.kernel = kernel
 
     def __call__(self, X, y, a, xi, b):
-        return np.sum(a * y * kernel_linear(X, xi)) + b
+        return np.sum(a * y * self.kernel(X, xi)) + b
 
 
 class CalcEi:
@@ -82,10 +100,17 @@ class CalcB:
 
 
 class SVM:
-    def __init__(self, c=1.0, epsilon=0.0, kernel=kernel_linear, max_iter=-1):
+    def __init__(self, c=1.0, epsilon=0.0, kernel='linear', max_iter=-1, p=2, gamma=0.01):
         self.c = c
         self.epsilon = epsilon
-        self.kernel = kernel
+
+        if kernel == 'poly':
+            self.kernel = KernelPloy(p)
+        elif kernel == 'rbf':
+            self.kernel = KernelGauss(gamma)
+        else:
+            self.kernel = KernelLinear()
+
         self.CalcGxi = CalcGxi(self.kernel)
         self.CalcEi = CalcEi()
         self.CalcA2Unc = CalcA2Unc()
@@ -94,7 +119,7 @@ class SVM:
         self.CalcEta = CalcEta()
         self.CalcB = CalcB()
 
-        self.Loss = Loss(kernel)
+        self.Loss = Loss(self.kernel)
 
         self.X = None
         self.y = None
@@ -132,7 +157,7 @@ class SVM:
             return np.abs(1 + self.epsilon - yi * gi)
 
         else:
-            print('ai={} does not violate kkt'.format(ai))
+            # print('ai={} does not violate kkt'.format(ai))
             return 0
 
     def update_b(self, b1_new, b2_new, a1_new, a2_new):
@@ -167,15 +192,16 @@ class SVM:
         sorted_e = np.argsort(self.e)
 
         if e1 > 0:
-            idx2 = sorted_e[0]
-            if idx2 == idx1:
-                idx2 = sorted_e[1]
-            return idx2
-        else:
-            idx2 = sorted_e[-1]
-            if idx2 == idx1:
-                idx2 = sorted_e[-2]
-            return idx2
+            for i in sorted_e:
+                if self.e[i] not in self.mask_idx2 and i != idx1:
+                    return i
+        if e1 < 0:
+            for i in sorted_e[::-1]:
+                if self.e[i] not in self.mask_idx2 and i != idx1:
+                    return i
+
+        sorted_e = sorted_e[(sorted_e != idx1) & (sorted_e not in self.mask_idx2)]
+        return sorted_e[-1]
 
     def find_a2_in_sv(self, idx1, idx2):
         self.mask_idx2.add(idx2)
@@ -186,7 +212,7 @@ class SVM:
                     and self.check_kkt(self.a[idx], self.y[idx], self.g[idx]):
                 return idx[0]
 
-        print("some thing error in a2!")
+        # print("some thing error in a2!")
         return None
 
     def check_terminal(self):
@@ -207,7 +233,7 @@ class SVM:
         yx = labels.reshape(1, -1).T * np.array([1, 1]) * dataset
         w = np.dot(yx.T, alphas)
 
-        return w.tolist()
+        return w
 
     def fit(self, X, y):
         assert len(X) == len(y), "X, y must have a same len"
@@ -263,6 +289,9 @@ class SVM:
 
             # 计算η
             eta = self.CalcEta(k11, k22, k12)
+            if eta <= 0:
+                self.mask_idx2.add(idx2)
+                continue
 
             # 计算未裁剪的a2
             a2_new_unc = self.CalcA2Unc(a2_old, y2, e1_old, e2_old, eta)
@@ -270,12 +299,11 @@ class SVM:
             a2_new = self.CalcA2(a1_old, a2_old, a2_new_unc, y1, y2)
             # 使用新的a2更新a1
             a1_new = self.CalcA1(a1_old, a2_old, a2_new, y1, y2)
+
             # 如果新的a1不满足 0<=a1<=C，说明a2不合适
             if a1_new < 0.0 or a1_new > self.c:
                 self.mask_idx2.add(idx2)
                 continue
-            else:
-                self.mask_idx2.clear()
 
             # update
             self.a[idx1] = a1_new
@@ -296,14 +324,29 @@ class SVM:
             # 如果loss减低太小，则在支持向量点寻找a2
             if abs(new_loss - loss) < 1e-5:
                 a2_in_sv = True
+                self.mask_idx2.add(idx2)
             else:
                 a2_in_sv = False
+                self.mask_idx2.clear()
 
             loss = new_loss
+
         # 计算下w
         self.w = self.get_w()
 
         return self
+
+    def predict(self, x):
+
+        ret = []
+        for xi in x:
+            g = self.CalcGxi(self.X, self.y, self.a, xi, self.b)
+            ret.append(g)
+
+        ret = np.array(ret)
+        ret[ret >= 0] = 1
+        ret[ret < 0] = -1
+        return ret
 
 
 def plot_line(svm, X, y):
@@ -358,30 +401,25 @@ def plot_sk_svc_decision_boundary(model, axis, X, y):
     plt.show()
 
 
+def plot_decision_boundary(model, axis):
+    x0, x1 = np.meshgrid(
+        np.linspace(axis[0], axis[1], int((axis[1] - axis[0]) * 100)).reshape(-1, 1),
+        np.linspace(axis[2], axis[3], int((axis[3] - axis[2]) * 100)).reshape(-1, 1),
+    )
+    X_new = np.c_[x0.ravel(), x1.ravel()]
+
+    y_predict = model.predict(X_new)
+    zz = y_predict.reshape(x0.shape)
+
+    from matplotlib.colors import ListedColormap
+    custom_cmap = ListedColormap(['#EF9A9A', '#FFF59D', '#90CAF9'])
+
+    plt.contourf(x0, x1, zz, linewidth=5, cmap=custom_cmap)
+
+
 if __name__ == '__main__':
     import matplotlib.pylab as plt
     from sklearn.svm import LinearSVC
-
-    def test_loss():
-        l = Loss(kernel_linear)
-        size = 10
-        X = np.random.rand(size, 2)
-        y = np.zeros(size) + 1
-        a = np.random.randn(size)
-        idx1, idx2 = 2, 6
-        r = l(X, y, a, idx1, idx2)
-        print(kernel_linear(X, X[1]))
-        print(r)
-
-    def loadDataSet(fileName):
-        dataMat = []
-        labelMat = []
-        fr = open(fileName)
-        for line in fr.readlines():
-            lineArr = line.strip().split(',')
-            dataMat.append([float(lineArr[0]), float(lineArr[1])])
-            labelMat.append(float(lineArr[2]))
-        return dataMat, labelMat
 
     # X = np.array([
     #     [3.393533211, 2.331273381],
@@ -397,17 +435,22 @@ if __name__ == '__main__':
     # ])
     # y = np.array([-1, -1, -1, -1, -1, 1, 1, 1, 1, 1])
 
-    X, y = loadDataSet("dataset.txt")
-    X = np.array(X)
-    y = np.array(y)
+    # my_svm = SVM(c=1, epsilon=0.09, max_iter=5000)
+    # my_svm.fit(X, y)
+    # plot_line(svm, X, y)
+    #
+    # clf = LinearSVC(C=0.5)
+    # clf.fit(X, y)
+    # plot_sk_svc_decision_boundary(clf, [0, 10, -5, 10], X, y)
+    from sklearn import datasets
+    X, y = datasets.make_circles(n_samples=50, random_state=888)
+    y[y == 0] = -1
+    # my_svm = SVM(c=10, epsilon=0.15, kernel='poly', max_iter=10000, p=7, sigma=1.3)
+    my_svm = SVM(c=5, epsilon=0.01, kernel='rbf', max_iter=10000, gamma=0.11)
+    my_svm.fit(X, y)
+    plot_decision_boundary(my_svm, axis=[-3.5, 3.5, -2.5, 2.5])
 
-    svm = SVM(c=1, epsilon=0.09, max_iter=5000)
-    svm.fit(X, y)
-    plot_line(svm, X, y)
 
-    clf = LinearSVC(C=0.5)
-    clf.fit(X, y)
-    plot_sk_svc_decision_boundary(clf, [0, 10, -5, 10], X, y)
-
-
-
+    plt.scatter(X[y == -1, 0], X[y == -1, 1])
+    plt.scatter(X[y == 1, 0], X[y == 1, 1])
+    plt.show()
