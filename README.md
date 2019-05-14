@@ -12,5 +12,5 @@
 4. 决策树，CART
 5. 逻辑回归
 6. 支持向量机、SMO实现
-7. 提升方法：AdaBoost
+7. 提升方法：AdaBoost， Boosting Tree
 8. ...
