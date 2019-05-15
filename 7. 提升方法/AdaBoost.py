@@ -2,6 +2,7 @@ import numpy as np
 from collections import Counter
 
 class Node:
+    '''结点类型'''
     def __init__(self):
         self.sp_v = None
         self.sp_dim = None
@@ -9,6 +10,7 @@ class Node:
         self.right = None
 
 class AdaBoostTree:
+    '''AdaBoost 分类树'''
     def __init__(self, tol):
         self.tol = tol
         self.node_list = []
@@ -17,11 +19,15 @@ class AdaBoostTree:
         self.w = None
         
     def calc_loss(self, y_hat, y):
+        ''' 计算loss '''
         idx = y_hat != y
         loss = np.sum(self.w[idx])  # 重点，loos是由权重w计算而来
         return loss
 
     def node_predict(self, X, y, sp_v, sp_dim):
+        '''针对子树预测
+            写这么多是为了处理两边分割后不同类型的样本数量相等的情况
+        '''
         y_hat = np.empty_like(y)
         y_unique = np.unique(y)
 
@@ -59,6 +65,7 @@ class AdaBoostTree:
         return y_hat
 
     def sign(self, y):
+        '''指示函数'''
         y_hat = y[:]
         y_hat[y > 0] = 1
         y_hat[y < 0] = -1
@@ -66,6 +73,7 @@ class AdaBoostTree:
         return y_hat
 
     def predict(self, X):
+        ''' 整体预测 '''
         y_hat = np.zeros(len(X))
         for a, node in zip(self.a_list, self.node_list):
             y_hat += a * self.node_predict(X, y, node.sp_v, node.sp_dim)
