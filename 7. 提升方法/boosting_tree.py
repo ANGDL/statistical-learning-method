@@ -44,7 +44,7 @@ class BoostingTree:
         return y_hat
 
     def __build_tree(self, X, y):
-        ''' 创建数 '''
+        ''' 创建树 '''
         ndim = len(X[0])
 
         # 初始化残差为y
